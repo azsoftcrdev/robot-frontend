@@ -1,0 +1,17 @@
+/* Quita el border-radius y fuerza color */
+.ant-menu-item-selected {
+  background-color: #1976D2 !important;
+  color: #fff !important;
+  border-radius: 16 !important;
+}
+
+/* Asegura que los íconos también se vuelvan blancos */
+.ant-menu-item-selected .ant-menu-item-icon {
+  color: #fff !important;
+}
+
+/* Si quieres que el texto no cambie de tono al pasar el mouse */
+.ant-menu-item-selected:hover {
+  background-color: #1565C0 !important; /* un tono más oscuro */
+  color: #fff !important;
+}
