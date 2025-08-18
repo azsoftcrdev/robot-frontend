@@ -82,7 +82,7 @@ const Layout: React.FC = () => {
             <button className="btn btn-light d-md-none" onClick={() => setShowSidebar(true)}>
               <MenuOutlined />
             </button>
-            <h5 className="mb-0 bold" style={{color: '#2475bb'}}>
+            <h5 className="mb-0 bold" style={{color: '#004ca5'}}>
               HexaMind UI
             </h5>
           </div>

@@ -7,10 +7,3 @@ body,
 #root {
   height: 100%;
 }
-
-.img-centrada {
-  width: 50% !important;
-  display: block !important;
-  margin-left: auto !important;
-  margin-right: auto !important;
-}

@@ -1,0 +1,21 @@
+.boton-tab-enabled {
+  background-color: #004ca5 ;
+  color: white;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  border-color: #646cff;
+}
+.boton-tab-enabled:hover {
+  background-color: #004ca5;
+}
+.boton-tab-disabled {
+  background-color: white;
+  color: #004ca5;
+  border-color: #dcdcdc;
+}
+.boton-tab-disabled:hover {
+  background-color: #f0f0f0;
+}
+
+.spiner-carga {
+  color: #004ca5 !important;
+}
