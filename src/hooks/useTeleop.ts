@@ -1,23 +1,27 @@
 import { useEffect, useRef, useState } from "react";
-import { useWebSocket } from "./useWebSocket";
+import { useRobotWS } from "./useRobotWS";  // debe resolver ws://<host>:<port>/ws
+import { useRobots } from "../robots/RobotsContext";
 
 export type Setpoint = { x:number; y:number; z:number; speed?:number };
 
 export function useTeleop(hz = 10) {
-  const { send } = useWebSocket("/ws");
+  const { active } = useRobots();
+  const { send } = useRobotWS(); 
   const pressed = useRef<Set<string>>(new Set());
   const [sp, setSp] = useState<Setpoint>({ x:0, y:0, z:0, speed:2 });
 
+  // enviar por WS (latest-wins)
   const sendSP = (next: Setpoint) => {
-    send({ type:"motion_setpoint", ...next });
+    send({ type: "motion_setpoint", ...next });
     setSp(next);
   };
 
-  // helpers de postura (puedes cambiarlos por endpoints reales)
-  const standUp = () => fetch("/posture/medium", { method:"POST" });
-  const crouch  = () => fetch("/posture/low",    { method:"POST" });
+  // helpers postura por HTTP si quieres (opcional)
+  const baseUrl = active ? `http://${active.host}:${active.httpPort}` : "";
+  const standUp = () => baseUrl && fetch(`${baseUrl}/posture/medium`, { method: "POST" });
+  const crouch  = () => baseUrl && fetch(`${baseUrl}/posture/low`,    { method: "POST" });
 
-  // traduce teclas → setpoint
+  // traduce teclado -> setpoint
   const compute = (prev: Setpoint): Setpoint => {
     const V = 15, speed = prev.speed ?? 2;
     const p = pressed.current;
@@ -31,7 +35,7 @@ export function useTeleop(hz = 10) {
     return { x,y,z,speed };
   };
 
-  // teclado (edge-triggered) + seguridad
+  // teclado + seguridad
   useEffect(() => {
     const dn = (e: KeyboardEvent) => {
       if (e.repeat) return;
@@ -61,19 +65,20 @@ export function useTeleop(hz = 10) {
     };
   }, [sp.speed]);
 
-  // heartbeat (para watchdog del backend)
+  // heartbeat WS (~10 Hz) para mantener vivo el setpoint (deadman en server)
   useEffect(() => {
     let last = "";
+    const period = Math.max(50, Math.min(1000, 1000 / hz));
     const id = setInterval(() => {
       setSp(prev => {
         const next = compute(prev);
-        const active = !!(next.x || next.y || next.z);
-        const msg = JSON.stringify({ type:"motion_setpoint", ...next });
-        if (active || msg !== last) send(JSON.parse(msg));
+        const activeMove = !!(next.x || next.y || next.z);
+        const msg = JSON.stringify({ type: "motion_setpoint", ...next });
+        if (activeMove || msg !== last) send(JSON.parse(msg));
         last = msg;
         return next;
       });
-    }, Math.max(50, Math.min(1000, 1000/ hz))); // ~10Hz por default
+    }, period);
     return () => clearInterval(id);
   }, [hz, send]);
 
