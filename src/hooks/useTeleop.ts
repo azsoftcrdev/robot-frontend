@@ -4,9 +4,10 @@ import { useRobotWS } from "./useRobotWS";
 import { useRobots } from "../robots/RobotsContext";
 
 export type Setpoint = { x:number; y:number; z:number; speed:number };
+export type PoseState = { h:number; cur_h?:number };
 
 function scaleV(speed:number) {
-  // Escala simple: 1..5 -> 6,12,18,24,30 (clamp a 30)
+  // Escala simple: 1..5 -> 6,12,18,24,30 (clamp 30)
   const v = 6 + (Math.max(1, Math.min(5, speed)) - 1) * 6;
   return Math.min(30, v);
 }
@@ -16,15 +17,22 @@ export function useTeleop(hz = 20) {
   const { send } = useRobotWS();               // ws://<host>:<port>/ws/
   const pressed = useRef<Set<string>>(new Set());
   const spRef   = useRef<Setpoint>({ x:0, y:0, z:0, speed:2 });
+  const poseRef = useRef<PoseState>({ h: 0 });
 
-  // Estado solo para mostrar en UI (throttled)
-  const [uiSp, setUiSp] = useState<Setpoint>(spRef.current);
+  // Estado visible para UI (throttled)
+  const [uiSp, setUiSp]     = useState<Setpoint>(spRef.current);
+  const [uiPose, setUiPose] = useState<PoseState>(poseRef.current);
 
-  const baseUrl = active ? `http://${active.host}:${active.httpPort}` : "";
-  const standUp = () => { if (baseUrl) fetch(`${baseUrl}/posture/medium`, { method:"POST" }); };
-  const crouch  = () => { if (baseUrl) fetch(`${baseUrl}/posture/low`,    { method:"POST" }); };
+  // ---- Helpers de envío WS ----
+  const sendMotion = (next: Setpoint) => send({ type:"motion_setpoint", ...next });
+  const sendPoseSet = (h:number)      => send({ type:"pose_setpoint",  h });
+  const sendPoseNudge = (dh:number)   => send({ type:"pose_nudge",     dh });
 
-  // Actualiza "setpoint visible" sin spamear renders
+  // Altura presets (reemplazan fetch HTTP)
+  const standUp = (h:number = +20) => { poseRef.current = { ...poseRef.current, h }; sendPoseSet(h); };
+  const crouch  = (h:number = -20) => { poseRef.current = { ...poseRef.current, h }; sendPoseSet(h); };
+
+  // Actualiza UI con throttle para evitar renders excesivos
   const updateUiThrottled = (() => {
     let last = 0;
     const minDt = 0.2; // 200 ms
@@ -33,6 +41,7 @@ export function useTeleop(hz = 20) {
       if (now - last >= minDt) {
         last = now;
         setUiSp(spRef.current);
+        setUiPose(poseRef.current);
       }
     };
   })();
@@ -57,17 +66,37 @@ export function useTeleop(hz = 20) {
     const dn = (e: KeyboardEvent) => {
       if (e.repeat) return;
       const k = e.key.toLowerCase();
-      if (k === " ") { e.preventDefault(); standUp(); return; }
-      if (k === "shift") { pressed.current.add(k); crouch(); return; }
+      // Altura por teclado:
+      if (k === " ") { e.preventDefault(); standUp(); updateUiThrottled(); return; } // Space: stand
+      if (k === "shift") { pressed.current.add(k); crouch(); updateUiThrottled(); return; } // Shift: crouch
+
       if ("wasdqez".includes(k)) pressed.current.add(k);
-      if (k === "escape") { pressed.current.clear(); spRef.current = { ...spRef.current, x:0, y:0, z:0 }; standUp(); updateUiThrottled(); }
+
+      // Emergencia
+      if (k === "escape") {
+        pressed.current.clear();
+        spRef.current = { ...spRef.current, x:0, y:0, z:0 };
+        standUp();
+        updateUiThrottled();
+      }
+
+      // Altura incremental con flechas ↑/↓ (opcional)
+      if (k === "arrowup")   { sendPoseNudge(+1); poseRef.current = { ...poseRef.current, h: Math.min(30, (poseRef.current.h ?? 0) + 1) }; updateUiThrottled(); }
+      if (k === "arrowdown") { sendPoseNudge(-1); poseRef.current = { ...poseRef.current, h: Math.max(-30,(poseRef.current.h ?? 0) - 1) }; updateUiThrottled(); }
     };
+
     const up = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
-      if (k === "shift") { pressed.current.delete(k); standUp(); return; }
+      if (k === "shift") { pressed.current.delete(k); standUp(); updateUiThrottled(); return; }
       if ("wasdqez".includes(k)) pressed.current.delete(k);
     };
-    const safeStop = () => { pressed.current.clear(); spRef.current = { ...spRef.current, x:0, y:0, z:0 }; standUp(); updateUiThrottled(); };
+
+    const safeStop = () => {
+      pressed.current.clear();
+      spRef.current = { ...spRef.current, x:0, y:0, z:0 };
+      standUp();
+      updateUiThrottled();
+    };
 
     window.addEventListener("keydown", dn, { passive:false });
     window.addEventListener("keyup",   up, { passive:false });
@@ -88,14 +117,12 @@ export function useTeleop(hz = 20) {
     const period = Math.max(30, Math.min(1000, 1000 / hz)); // 20 Hz por defecto
     const id = setInterval(() => {
       const next = compute();
-      // compara con lo último enviado
       const msgObj = { type:"motion_setpoint", ...next };
       const msgStr = JSON.stringify(msgObj);
       if (msgStr !== prevStr) {
         send(msgObj);
         prevStr = msgStr;
       }
-      // guarda y actualiza UI con throttle
       spRef.current = next;
       updateUiThrottled();
     }, period);
@@ -106,19 +133,51 @@ export function useTeleop(hz = 20) {
   const bumpSpeed = (d:number) => {
     const s = Math.max(1, Math.min(5, (spRef.current.speed ?? 2) + d));
     spRef.current = { ...spRef.current, speed: s };
-    // manda inmediatamente el cambio de velocidad (aunque no haya teclas)
-    const msg = { type:"motion_setpoint", ...spRef.current };
-    send(msg);
+    // manda inmediatamente el cambio
+    sendMotion(spRef.current);
     updateUiThrottled();
   };
 
-  // API opcional por si quieres forzar envío
+  // Forzar envío parcial
   const sendSP = (nextPartial: Partial<Setpoint>) => {
     const merged = { ...spRef.current, ...nextPartial };
     spRef.current = merged;
-    send({ type:"motion_setpoint", ...merged });
+    sendMotion(merged);
     updateUiThrottled();
   };
 
-  return { sp: uiSp, sendSP, bumpSpeed, standUp, crouch };
+  // Nudge de altura (+/- 1 por tick); útil para rueda del ratón o slider fino
+  const nudgeHeight = (dh:number) => {
+    sendPoseNudge(dh);
+    poseRef.current = { ...poseRef.current, h: Math.max(-30, Math.min(30, (poseRef.current.h ?? 0) + dh)) };
+    updateUiThrottled();
+  };
+
+  // Set directo de altura (slider grande)
+  const setHeight = (h:number) => {
+    const hh = Math.max(-30, Math.min(30, h));
+    poseRef.current = { ...poseRef.current, h: hh };
+    sendPoseSet(hh);
+    updateUiThrottled();
+  };
+
+  // (Opcional) handler para rueda del mouse en un canvas/área:
+  // úsalo en el componente: onWheel={(e)=>{ e.preventDefault(); nudgeHeight(e.deltaY>0?-1:+1); }}
+  const onWheelHeight = (e: WheelEvent) => {
+    e.preventDefault();
+    nudgeHeight(e.deltaY > 0 ? -1 : +1);
+  };
+
+  return {
+    sp: uiSp,
+    pose: uiPose,
+    sendSP,
+    bumpSpeed,
+    // Altura
+    setHeight,
+    nudgeHeight,
+    standUp,
+    crouch,
+    onWheelHeight,
+  };
 }
